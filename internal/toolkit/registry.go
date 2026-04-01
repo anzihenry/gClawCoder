@@ -39,6 +39,7 @@ func (r *Registry) RegisterDefaults() {
 	r.Register("TodoWrite", NewTodoWriteTool())
 	r.Register("Agent", NewAgentTool())
 	r.Register("Task", NewTaskTool())
+	r.Register("NotebookEdit", NewNotebookTool())
 }
 
 // Register 注册工具
