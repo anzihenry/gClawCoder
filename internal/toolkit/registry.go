@@ -46,6 +46,8 @@ func (r *Registry) RegisterDefaults() {
 	r.Register("RemoteTrigger", NewRemoteTriggerTool())
 	r.Register("ScheduleCron", NewScheduleCronTool())
 	r.Register("Team", NewTeamTool())
+	r.Register("MCP", NewMCPTool())
+	r.Register("Skill", NewSkillTool(""))
 }
 
 // Register 注册工具

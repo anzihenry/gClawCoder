@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
-	"time"
 )
 
 // WebSocketClient WebSocket 传输 MCP 客户端

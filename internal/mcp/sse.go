@@ -32,7 +32,7 @@ type EventSource struct {
 	resp    *http.Response
 	scanner *bufio.Scanner
 	onEvent func(EventType, []byte)
-	onError func(error)
+	onError chan error
 	done    chan struct{}
 }
 
@@ -81,7 +81,7 @@ func (c *SSEClient) Connect() error {
 		url:     sseURL,
 		resp:    resp,
 		scanner: bufio.NewScanner(resp.Body),
-		done:    make(chan struct{}),
+		onError: make(chan error, 1),
 	}
 
 	// 启动事件处理
@@ -124,8 +124,6 @@ func (c *SSEClient) processEvents() {
 	if err := c.eventSource.scanner.Err(); err != nil && err != io.EOF {
 		c.eventSource.onError <- err
 	}
-
-	close(c.eventSource.done)
 }
 
 // handleEvent 处理单个事件
