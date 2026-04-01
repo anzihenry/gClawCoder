@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/gclawcoder/gclaw/internal/api"
 )
 
 // ConfigSource 配置来源
@@ -30,6 +32,9 @@ type RuntimeConfig struct {
 	PermissionMode string
 	APIKey         string
 	BaseURL        string
+	AuthType       string
+	AuthHeader     string
+	Version        string
 	MaxTokens      int
 	MaxIterations  int
 }
@@ -110,6 +115,24 @@ func (l *ConfigLoader) Load() (*RuntimeConfig, error) {
 	if maxTokens, ok := merged["maxTokens"].(float64); ok {
 		config.MaxTokens = int(maxTokens)
 	}
+
+	// 优先从 API Key 配置文件读取
+	apiKeyClient := api.NewAPIKeyClient()
+	if apiKeyClient.IsConfigured() {
+		apiKeyInfo, err := apiKeyClient.GetConfig()
+		if err == nil {
+			config.APIKey = apiKeyInfo.APIKey
+			config.BaseURL = apiKeyInfo.BaseURL
+			config.AuthType = apiKeyInfo.AuthType
+			config.AuthHeader = apiKeyInfo.AuthHeader
+			config.Version = apiKeyInfo.Version
+			if apiKeyInfo.Model != "" {
+				config.Model = apiKeyInfo.Model
+			}
+		}
+	}
+
+	// 环境变量覆盖配置文件
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
 		config.APIKey = apiKey
 	}

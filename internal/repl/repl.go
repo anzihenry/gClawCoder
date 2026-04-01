@@ -34,11 +34,44 @@ type REPL struct {
 // NewREPL 创建 REPL
 func NewREPL(cfg *config.RuntimeConfig) (*REPL, error) {
 	apiKey := cfg.APIKey
+	baseURL := cfg.BaseURL
+	authType := cfg.AuthType
+	authHeader := cfg.AuthHeader
+	version := cfg.Version
+
+	// 设置默认值
+	if authType == "" {
+		authType = "header"
+	}
+	if authHeader == "" {
+		authHeader = "x-api-key"
+	}
+
+	if apiKey == "" {
+		// 尝试从 API Key 配置文件读取
+		apiKeyClient := api.NewAPIKeyClient()
+		if apiKeyClient.IsConfigured() {
+			apiKeyInfo, err := apiKeyClient.GetConfig()
+			if err == nil {
+				apiKey = apiKeyInfo.APIKey
+				if baseURL == "" {
+					baseURL = apiKeyInfo.BaseURL
+				}
+				if authType == "header" && apiKeyInfo.AuthType != "" {
+					authType = apiKeyInfo.AuthType
+				}
+				if authHeader == "x-api-key" && apiKeyInfo.AuthHeader != "" {
+					authHeader = apiKeyInfo.AuthHeader
+				}
+			}
+		}
+	}
+
 	if apiKey == "" {
 		apiKey = api.GetAPIKey()
 	}
 
-	apiClient := api.NewClient(apiKey, cfg.Model)
+	apiClient := api.NewClientWithFullConfig(apiKey, cfg.Model, baseURL, authType, authHeader, version)
 	toolRegistry := toolkit.NewRegistry()
 	permissionPolicy := permissions.NewPermissionPolicy(permissions.DangerFullAccess)
 

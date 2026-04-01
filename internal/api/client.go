@@ -96,6 +96,10 @@ type Client struct {
 	BaseURL    string
 	Model      string
 	MaxTokens  int
+	AuthType   string // "bearer", "header", "query"
+	AuthHeader string // 认证头名称
+	Version    string // API 版本
+	Endpoint   string // API endpoint 路径
 }
 
 // NewClient 创建新客户端
@@ -116,6 +120,52 @@ func NewClient(apiKey, model string) *Client {
 		BaseURL:    baseURL,
 		Model:      model,
 		MaxTokens:  maxTokens,
+	}
+}
+
+// NewClientWithConfig 使用自定义配置创建客户端
+func NewClientWithConfig(apiKey, model, baseURL string) *Client {
+	return NewClientWithFullConfig(apiKey, model, baseURL, "bearer", "Authorization", "")
+}
+
+// NewClientWithFullConfig 使用完整配置创建客户端
+func NewClientWithFullConfig(apiKey, model, baseURL, authType, authHeader, version string) *Client {
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+
+	maxTokens := 4096
+	if model == "" {
+		model = "claude-sonnet-4-20250514"
+	}
+
+	if authType == "" {
+		authType = "header"
+	}
+
+	if authHeader == "" {
+		authHeader = "x-api-key"
+	}
+
+	// 根据 BaseURL 设置 endpoint
+	endpoint := "/v1/messages"
+	if baseURL != "" {
+		if strings.Contains(baseURL, "dashscope") {
+			// Alibaba uses /chat/completions
+			endpoint = "/chat/completions"
+		}
+	}
+
+	return &Client{
+		HTTPClient: &http.Client{Timeout: 120 * time.Second},
+		APIKey:     apiKey,
+		BaseURL:    baseURL,
+		Model:      model,
+		MaxTokens:  maxTokens,
+		AuthType:   authType,
+		AuthHeader: authHeader,
+		Version:    version,
+		Endpoint:   endpoint,
 	}
 }
 
@@ -153,14 +203,31 @@ func (c *Client) sendRequest(reqBody APIRequest) (*APIResponse, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL+"/v1/messages", bytes.NewReader(jsonData))
+	endpoint := c.Endpoint
+	if endpoint == "" {
+		endpoint = "/v1/messages"
+	}
+
+	req, err := http.NewRequest("POST", c.BaseURL+endpoint, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+
+	// 根据认证类型设置认证头
+	switch c.AuthType {
+	case "bearer":
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	case "header":
+		req.Header.Set(c.AuthHeader, c.APIKey)
+		if c.Version != "" {
+			req.Header.Set("anthropic-version", c.Version)
+		}
+	case "query":
+		// Query 参数认证在 URL 中添加
+		req.URL.RawQuery = fmt.Sprintf("%s=%s", c.AuthHeader, c.APIKey)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -187,14 +254,30 @@ func (c *Client) sendStreamRequest(reqBody APIRequest) (<-chan StreamEvent, erro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL+"/v1/messages", bytes.NewReader(jsonData))
+	endpoint := c.Endpoint
+	if endpoint == "" {
+		endpoint = "/v1/messages"
+	}
+
+	req, err := http.NewRequest("POST", c.BaseURL+endpoint, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+
+	// 根据认证类型设置认证头
+	switch c.AuthType {
+	case "bearer":
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	case "header":
+		req.Header.Set(c.AuthHeader, c.APIKey)
+		if c.Version != "" {
+			req.Header.Set("anthropic-version", c.Version)
+		}
+	case "query":
+		req.URL.RawQuery = fmt.Sprintf("%s=%s", c.AuthHeader, c.APIKey)
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
