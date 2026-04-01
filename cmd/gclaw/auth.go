@@ -449,13 +449,13 @@ func cmdWhoami() {
 }
 
 func cmdTUI() {
-	t, err := tui.NewTUI()
+	app, err := tui.NewApp()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
 		os.Exit(1)
 	}
 
-	if err := t.Run(); err != nil {
+	if err := app.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		os.Exit(1)
 	}

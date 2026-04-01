@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gclawcoder/gclaw/internal/api"
@@ -15,45 +14,42 @@ import (
 	"github.com/rivo/tview"
 )
 
-// TUI TUI 应用
-type TUI struct {
+// App TUI 应用
+type App struct {
 	app          *tview.Application
-	pages        *tview.Pages
+	layout       *tview.Flex
 	input        *tview.TextArea
-	messages     *tview.TextView
+	output       *tview.TextView
 	status       *tview.TextView
-	model        *tview.TextView
-	sidebar      *tview.List
+	modelInfo    *tview.TextView
+	menu         *tview.List
+	pages        *tview.Pages
 	session      *conversation.Session
 	runtime      *conversation.ConversationRuntime
-	toolRegistry *toolkit.Registry
 	apiKeyClient *api.APIKeyClient
-	config       *config.RuntimeConfig
-	mu           sync.Mutex
-	isProcessing bool
-	messagesList []MessageEntry
+	cfg          *config.RuntimeConfig
+	busy         bool
+	history      []string
+	historyIdx   int
 }
 
-// MessageEntry 消息条目
-type MessageEntry struct {
-	Role    string
-	Content string
-}
-
-// NewTUI 创建 TUI
-func NewTUI() (*TUI, error) {
+// NewApp 创建 TUI 应用
+func NewApp() (*App, error) {
 	apiKeyClient := api.NewAPIKeyClient()
 
 	var cfg *config.RuntimeConfig
 	if apiKeyClient.IsConfigured() {
-		apiKeyInfo, _ := apiKeyClient.GetConfig()
+		info, err := apiKeyClient.GetConfig()
+		if err != nil {
+			return nil, err
+		}
 		cfg = &config.RuntimeConfig{
-			Model:          apiKeyInfo.Model,
-			APIKey:         apiKeyInfo.APIKey,
-			BaseURL:        apiKeyInfo.BaseURL,
-			AuthType:       apiKeyInfo.AuthType,
-			AuthHeader:     apiKeyInfo.AuthHeader,
-			Version:        apiKeyInfo.Version,
+			Model:          info.Model,
+			APIKey:         info.APIKey,
+			BaseURL:        info.BaseURL,
+			AuthType:       info.AuthType,
+			AuthHeader:     info.AuthHeader,
+			Version:        info.Version,
 			PermissionMode: "danger-full-access",
 			MaxTokens:      4096,
 			MaxIterations:  100,
@@ -67,311 +63,269 @@ func NewTUI() (*TUI, error) {
 		}
 	}
 
-	apiClient := createAPIClient(cfg)
-	toolRegistry := toolkit.NewRegistry()
-
+	client := createClient(cfg)
+	registry := toolkit.NewRegistry()
 	session := conversation.NewSession()
-	runtime := conversation.NewConversationRuntime(
-		session,
-		apiClient,
-		toolRegistry,
-		nil,
-		"",
-	)
+	runtime := conversation.NewConversationRuntime(session, client, registry, nil, "")
 
-	t := &TUI{
+	app := &App{
 		app:          tview.NewApplication(),
+		apiKeyClient: apiKeyClient,
+		cfg:          cfg,
 		session:      session,
 		runtime:      runtime,
-		toolRegistry: toolRegistry,
-		apiKeyClient: apiKeyClient,
-		config:       cfg,
-		messagesList: make([]MessageEntry, 0),
+		history:      make([]string, 0),
+		historyIdx:   -1,
 	}
 
-	t.createUI()
-	return t, nil
+	app.createUI()
+	return app, nil
 }
 
-func createAPIClient(cfg *config.RuntimeConfig) *api.Client {
+func createClient(cfg *config.RuntimeConfig) *api.Client {
 	authType := cfg.AuthType
-	authHeader := cfg.AuthHeader
-	version := cfg.Version
-
 	if authType == "" {
 		authType = "header"
 	}
+	authHeader := cfg.AuthHeader
 	if authHeader == "" {
 		authHeader = "x-api-key"
 	}
 
 	if cfg.APIKey == "" {
-		apiKeyClient := api.NewAPIKeyClient()
-		if apiKeyClient.IsConfigured() {
-			apiKeyInfo, _ := apiKeyClient.GetConfig()
-			cfg.APIKey = apiKeyInfo.APIKey
+		client := api.NewAPIKeyClient()
+		if info, err := client.GetConfig(); err == nil {
+			cfg.APIKey = info.APIKey
 			if cfg.BaseURL == "" {
-				cfg.BaseURL = apiKeyInfo.BaseURL
-			}
-			if authType == "header" && apiKeyInfo.AuthType != "" {
-				authType = apiKeyInfo.AuthType
-			}
-			if authHeader == "x-api-key" && apiKeyInfo.AuthHeader != "" {
-				authHeader = apiKeyInfo.AuthHeader
+				cfg.BaseURL = info.BaseURL
 			}
 		}
 	}
 
-	return api.NewClientWithFullConfig(cfg.APIKey, cfg.Model, cfg.BaseURL, authType, authHeader, version)
+	return api.NewClientWithFullConfig(cfg.APIKey, cfg.Model, cfg.BaseURL, authType, authHeader, cfg.Version)
 }
 
-func (t *TUI) createUI() {
-	t.messages = tview.NewTextView().
+func (a *App) createUI() {
+	a.output = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
 		SetScrollable(true)
-	t.messages.SetTitle(" Messages ").SetBorder(true)
+	a.output.SetBorder(true).SetTitle(" Chat ")
+	a.output.SetBackgroundColor(tcell.ColorDefault)
 
-	t.input = tview.NewTextArea().
+	a.input = tview.NewTextArea().
 		SetWrap(true).
-		SetPlaceholder("输入消息... (Ctrl+Enter 发送，Ctrl+Q 退出)")
-	t.input.SetTitle(" Input ").SetBorder(true)
+		SetPlaceholder("Type message... (Ctrl+Enter to send, Ctrl+Q to quit)")
+	a.input.SetBorder(true).SetTitle(" Input ")
+	a.input.SetBackgroundColor(tcell.ColorDefault)
 
-	t.status = tview.NewTextView().
+	a.status = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText("[green]Ready[]")
-	t.status.SetBorder(true).SetTitle(" Status ")
+		SetText("[green]● Ready[]")
+	a.status.SetBorder(true)
 
-	t.model = tview.NewTextView().
+	a.modelInfo = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(fmt.Sprintf("[yellow]Model:[white] %s", t.config.Model))
-	t.model.SetBorder(true).SetTitle(" Model ")
+		SetText(fmt.Sprintf("[yellow]Model:[white] %s", a.cfg.Model))
+	a.modelInfo.SetBorder(true)
 
-	t.sidebar = tview.NewList()
-	t.sidebar.AddItem("New Chat", "Start new conversation", 'n', nil).
-		AddItem("Clear", "Clear messages", 'c', nil).
-		AddItem("Models", "Change model", 'm', nil).
-		AddItem("Export", "Export conversation", 'e', nil).
-		AddItem("Quit", "Exit application", 'q', nil)
-	t.sidebar.SetTitle(" Menu ").SetBorder(true)
+	a.menu = tview.NewList()
+	a.menu.SetBorder(true).SetTitle(" Menu ")
+	a.menu.SetBackgroundColor(tcell.ColorDefault)
+	a.menu.AddItem("New Chat", "Clear conversation", 'n', func() { a.newChat() })
+	a.menu.AddItem("Models", "Switch model", 'm', func() { a.showModels() })
+	a.menu.AddItem("Export", "Save to file", 'e', func() { a.export() })
+	a.menu.AddItem("Quit", "Exit application", 'q', func() { a.app.Stop() })
 
-	inputFlex := tview.NewFlex().
-		AddItem(t.input, 0, 3, true)
+	inputBox := tview.NewFlex().
+		AddItem(a.input, 0, 1, true)
 
-	messagesFlex := tview.NewFlex().
-		AddItem(t.messages, 0, 1, false)
+	chatBox := tview.NewFlex().
+		AddItem(a.output, 0, 1, false)
 
-	leftFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(messagesFlex, 0, 3, false).
-		AddItem(inputFlex, 3, 1, false)
+	leftPanel := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(chatBox, 0, 3, false).
+		AddItem(inputBox, 5, 1, false)
 
-	mainFlex := tview.NewFlex().
-		AddItem(leftFlex, 0, 4, false).
-		AddItem(t.sidebar, 0, 1, false)
+	rightPanel := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.menu, 0, 1, false)
 
-	statusFlex := tview.NewFlex().
-		AddItem(t.status, 0, 1, false).
-		AddItem(t.model, 30, 1, false)
+	mainContent := tview.NewFlex().
+		AddItem(leftPanel, 0, 4, false).
+		AddItem(rightPanel, 0, 1, false)
 
-	rootFlex := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(mainFlex, 0, 1, false).
-		AddItem(statusFlex, 1, 1, false)
+	statusBar := tview.NewFlex().
+		AddItem(a.status, 0, 1, false).
+		AddItem(a.modelInfo, 30, 1, false)
 
-	t.pages = tview.NewPages().
-		AddPage("main", rootFlex, true, true)
+	root := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(mainContent, 0, 1, false).
+		AddItem(statusBar, 1, 1, false)
 
-	t.app.SetRoot(t.pages, true).
-		SetFocus(t.input)
+	a.layout = root
+	a.pages = tview.NewPages().AddPage("main", root, true, true)
 
-	t.setupInputHandler()
-	t.setupSidebarHandler()
+	a.app.SetRoot(a.pages, true).SetFocus(a.input)
+	a.setupHandlers()
 }
 
-func (t *TUI) setupInputHandler() {
-	t.input.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEnter && event.Modifiers()&tcell.ModCtrl != 0 {
-			text := t.input.GetText()
-			if strings.TrimSpace(text) != "" && !t.isProcessing {
-				t.sendMessage(text)
+func (a *App) setupHandlers() {
+	a.input.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModCtrl != 0 {
+			text := a.input.GetText()
+			if text != "" && !a.busy {
+				a.send(text)
 			}
 			return nil
 		}
-		if event.Key() == tcell.KeyRune && event.Rune() == 'q' && event.Modifiers()&tcell.ModCtrl != 0 {
-			t.app.Stop()
+		if ev.Key() == tcell.KeyRune && ev.Rune() == 'q' && ev.Modifiers()&tcell.ModCtrl != 0 {
+			a.app.Stop()
 			return nil
 		}
-		return event
+		if ev.Key() == tcell.KeyUp {
+			if a.historyIdx < len(a.history)-1 {
+				a.historyIdx++
+				a.input.SetText(a.history[len(a.history)-1-a.historyIdx], true)
+			}
+			return nil
+		}
+		if ev.Key() == tcell.KeyDown {
+			if a.historyIdx > 0 {
+				a.historyIdx--
+				a.input.SetText(a.history[len(a.history)-1-a.historyIdx], true)
+			} else if a.historyIdx == 0 {
+				a.historyIdx = -1
+				a.input.SetText("", true)
+			}
+			return nil
+		}
+		return ev
 	})
-}
 
-func (t *TUI) setupSidebarHandler() {
-	t.sidebar.SetSelectedFunc(func(index int, text string, secondaryText string, shortcut rune) {
-		switch shortcut {
-		case 'n':
-			t.newChat()
-		case 'c':
-			t.clearMessages()
-		case 'm':
-			t.showModelSelector()
-		case 'e':
-			t.exportConversation()
-		case 'q':
-			t.app.Stop()
+	a.menu.SetSelectedFunc(func(idx int, label, _ string, _ rune) {
+		switch idx {
+		case 0:
+			a.newChat()
+		case 1:
+			a.showModels()
+		case 2:
+			a.export()
+		case 3:
+			a.app.Stop()
 		}
 	})
 }
 
-func (t *TUI) sendMessage(text string) {
-	t.mu.Lock()
-	if t.isProcessing {
-		t.mu.Unlock()
-		return
-	}
-	t.isProcessing = true
-	t.mu.Unlock()
+func (a *App) send(text string) {
+	a.busy = true
+	a.input.SetText("", true)
+	a.history = append(a.history, text)
+	a.historyIdx = -1
 
-	t.input.SetText("", true)
-	t.appendMessage("user", text)
-	t.updateStatus("[yellow]Thinking...[]")
+	a.output.SetText(fmt.Sprintf("%s[green]You:[white] %s\n\n", a.output.GetText(true), text))
+	a.status.SetText("[yellow]● Thinking...[]")
 
 	go func() {
-		result, err := t.runtime.RunTurn(text)
-
-		t.app.QueueUpdateDraw(func() {
+		result, err := a.runtime.RunTurn(text)
+		a.app.QueueUpdateDraw(func() {
 			if err != nil {
-				t.appendMessage("error", fmt.Sprintf("Error: %v", err))
-				t.updateStatus("[red]Error[]")
+				a.output.SetText(fmt.Sprintf("%s[red]Error:[white] %v\n\n", a.output.GetText(true), err))
+				a.status.SetText("[red]● Error[]")
 			} else {
 				for _, msg := range result.AssistantMessages {
 					for _, block := range msg.Content {
 						if block.Type == conversation.BlockTypeText {
-							t.appendMessage("assistant", block.Text)
+							a.output.SetText(fmt.Sprintf("%s[cyan]Assistant:[white] %s\n\n", a.output.GetText(true), block.Text))
 						}
 					}
 				}
-				t.updateStatus("[green]Ready[]")
+				a.status.SetText("[green]● Ready[]")
 			}
-
-			t.mu.Lock()
-			t.isProcessing = false
-			t.mu.Unlock()
+			a.busy = false
+			a.app.SetFocus(a.input)
 		})
 	}()
 }
 
-func (t *TUI) appendMessage(role, content string) {
-	t.messagesList = append(t.messagesList, MessageEntry{
-		Role:    role,
-		Content: content,
-	})
-
-	color := "white"
-	prefix := "You"
-	switch role {
-	case "user":
-		color = "green"
-		prefix = "You"
-	case "assistant":
-		color = "cyan"
-		prefix = "Assistant"
-	case "error":
-		color = "red"
-		prefix = "Error"
-	}
-
-	fmt.Fprintf(t.messages, "[%s]%s:[white] %s\n\n", color, prefix, content)
-	t.messages.ScrollToEnd()
+func (a *App) newChat() {
+	a.session = conversation.NewSession()
+	a.runtime = conversation.NewConversationRuntime(
+		a.session,
+		createClient(a.cfg),
+		toolkit.NewRegistry(),
+		nil,
+		"",
+	)
+	a.output.SetText("")
+	a.status.SetText("[green]● Ready[]")
 }
 
-func (t *TUI) updateStatus(status string) {
-	t.status.SetText(status)
-}
-
-func (t *TUI) newChat() {
-	t.session = conversation.NewSession()
-	t.messagesList = make([]MessageEntry, 0)
-	t.messages.Clear()
-	t.updateStatus("[green]New chat started[]")
-}
-
-func (t *TUI) clearMessages() {
-	t.messagesList = make([]MessageEntry, 0)
-	t.messages.Clear()
-	t.updateStatus("[green]Messages cleared[]")
-}
-
-func (t *TUI) showModelSelector() {
-	if !t.apiKeyClient.IsConfigured() {
-		t.updateStatus("[yellow]No API Key configured[]")
+func (a *App) showModels() {
+	if !a.apiKeyClient.IsConfigured() {
+		a.status.SetText("[yellow]● No API Key[]")
 		return
 	}
 
-	models, err := t.apiKeyClient.GetAvailableModels()
+	models, err := a.apiKeyClient.GetAvailableModels()
 	if err != nil {
-		t.updateStatus(fmt.Sprintf("[red]Error: %v[]", err))
+		a.status.SetText(fmt.Sprintf("[red]● Error: %v[]", err))
 		return
 	}
 
-	currentModel, _ := t.apiKeyClient.GetCurrentModel()
+	current, _ := a.apiKeyClient.GetCurrentModel()
 
-	// 简单的列表选择
-	list := tview.NewList()
-	list.SetTitle(" Select Model ")
-	list.SetBorder(true)
+	modalList := tview.NewList()
+	modalList.SetBorder(true).SetTitle(" Select Model (Esc to close) ")
+	modalList.SetBackgroundColor(tcell.ColorDarkCyan)
 
-	for _, model := range models {
-		marker := ""
-		if model == currentModel {
-			marker = " ✓"
+	for _, m := range models {
+		mark := ""
+		if m == current {
+			mark = " ✓"
 		}
-		list.AddItem(model+marker, "", 0, nil)
+		modalList.AddItem(m+mark, "", 0, nil)
 	}
 
-	list.SetSelectedFunc(func(index int, text string, _ string, _ rune) {
-		selectedModel := strings.TrimSpace(strings.TrimSuffix(text, " ✓"))
-		if err := t.apiKeyClient.SetModel(selectedModel); err == nil {
-			t.config.Model = selectedModel
-			t.model.SetText(fmt.Sprintf("[yellow]Model:[white] %s", selectedModel))
-			t.updateStatus(fmt.Sprintf("[green]Switched to %s[]", selectedModel))
+	modalList.SetSelectedFunc(func(idx int, label, _ string, _ rune) {
+		name := strings.TrimSpace(strings.TrimSuffix(label, " ✓"))
+		if err := a.apiKeyClient.SetModel(name); err == nil {
+			a.cfg.Model = name
+			a.modelInfo.SetText(fmt.Sprintf("[yellow]Model:[white] %s", name))
+			a.status.SetText(fmt.Sprintf("[green]● Switched to %s[]", name))
 		}
-		t.pages.RemovePage("modellist")
-		t.app.SetFocus(t.input)
+		a.pages.RemovePage("modal")
+		a.app.SetFocus(a.input)
 	})
 
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' {
-			t.pages.RemovePage("modellist")
-			t.app.SetFocus(t.input)
+	modalList.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == tcell.KeyEscape {
+			a.pages.RemovePage("modal")
+			a.app.SetFocus(a.input)
 			return nil
 		}
-		return event
+		return ev
 	})
 
-	t.pages.AddPage("modellist", list, true, true)
-	t.app.SetFocus(list)
+	a.pages.AddPage("modal", modalList, true, true)
+	a.app.SetFocus(modalList)
 }
 
-func (t *TUI) exportConversation() {
-	if len(t.messagesList) == 0 {
-		t.updateStatus("[yellow]No messages to export[]")
+func (a *App) export() {
+	content := a.output.GetText(true)
+	if content == "" {
+		a.status.SetText("[yellow]● Nothing to export[]")
 		return
 	}
 
-	var builder strings.Builder
-	for _, msg := range t.messagesList {
-		fmt.Fprintf(&builder, "%s: %s\n\n", msg.Role, msg.Content)
-	}
-
-	filePath := fmt.Sprintf("conversation-%d.txt", time.Now().Unix())
-
-	err := os.WriteFile(filePath, []byte(builder.String()), 0644)
-	if err != nil {
-		t.updateStatus(fmt.Sprintf("[red]Export failed: %v[]", err))
+	filename := fmt.Sprintf("chat-%d.txt", time.Now().Unix())
+	if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+		a.status.SetText(fmt.Sprintf("[red]● Export failed: %v[]", err))
 	} else {
-		t.updateStatus(fmt.Sprintf("[green]Exported to %s[]", filePath))
+		a.status.SetText(fmt.Sprintf("[green]● Exported to %s[]", filename))
 	}
 }
 
-func (t *TUI) Run() error {
-	return t.app.Run()
+// Run 运行 TUI
+func (a *App) Run() error {
+	return a.app.Run()
 }
