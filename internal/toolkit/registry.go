@@ -40,6 +40,12 @@ func (r *Registry) RegisterDefaults() {
 	r.Register("Agent", NewAgentTool())
 	r.Register("Task", NewTaskTool())
 	r.Register("NotebookEdit", NewNotebookTool())
+	r.Register("AskUserQuestion", NewAskUserQuestionTool())
+	r.Register("Config", NewConfigTool())
+	r.Register("LSP", NewLSPTool())
+	r.Register("RemoteTrigger", NewRemoteTriggerTool())
+	r.Register("ScheduleCron", NewScheduleCronTool())
+	r.Register("Team", NewTeamTool())
 }
 
 // Register 注册工具
