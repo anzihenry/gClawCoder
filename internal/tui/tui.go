@@ -35,6 +35,11 @@ type App struct {
 
 // NewApp 创建 TUI 应用
 func NewApp() (*App, error) {
+	// 提前检查 tty
+	if _, err := os.Stat("/dev/tty"); err != nil {
+		return nil, fmt.Errorf("TUI requires a real terminal. Please run directly in your terminal (not in a pipe or script)")
+	}
+
 	apiKeyClient := api.NewAPIKeyClient()
 
 	var cfg *config.RuntimeConfig
@@ -327,5 +332,15 @@ func (a *App) export() {
 
 // Run 运行 TUI
 func (a *App) Run() error {
+	// 检查是否有真实的 tty
+	if _, err := os.Stat("/dev/tty"); err != nil {
+		fmt.Fprintln(os.Stderr, "TUI requires a real terminal")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Please run this command directly in your terminal:")
+		fmt.Fprintln(os.Stderr, "  ./gclaw tui")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Note: TUI doesn't work with pipes, SSH without tty, or in some IDEs.")
+		os.Exit(1)
+	}
 	return a.app.Run()
 }
