@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gclawcoder/gclaw/internal/api"
+	"github.com/gclawcoder/gclaw/internal/tui"
 )
 
 func cmdLogin() {
@@ -444,6 +445,19 @@ func cmdWhoami() {
 		if desc := info["description"]; desc != nil && desc.(string) != "" {
 			fmt.Printf("  Description: %v\n", desc)
 		}
+	}
+}
+
+func cmdTUI() {
+	t, err := tui.NewTUI()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := t.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
 	}
 }
 

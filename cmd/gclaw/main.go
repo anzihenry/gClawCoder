@@ -52,6 +52,8 @@ func main() {
 		cmdLoadSession(args)
 	case "repl":
 		cmdREPL()
+	case "tui":
+		cmdTUI()
 	case "login":
 		cmdLogin()
 	case "logout":
@@ -94,6 +96,7 @@ Commands:
   logout          Clear stored credentials
   whoami          Show current authentication status
   model           View or switch AI model
+  tui             Start TUI (Text User Interface)
   help            Show this help message
 
 Examples:
