@@ -272,8 +272,29 @@ func (r *ConversationRuntime) buildToolDefinitions() []api.ToolDefinition {
 }
 
 func (r *ConversationRuntime) parseResponse(resp *api.APIResponse) []ContentBlock {
-	blocks := make([]ContentBlock, 0, len(resp.Content))
+	blocks := make([]ContentBlock, 0)
 
+	// 尝试 OpenAI 格式
+	if len(resp.Choices) > 0 && resp.Choices[0].Message.Content != "" {
+		// OpenAI 格式：从 choices[0].message.content 读取
+		blocks = append(blocks, ContentBlock{
+			Type: BlockTypeText,
+			Text: resp.Choices[0].Message.Content,
+		})
+
+		// 处理 tool_calls
+		for _, tc := range resp.Choices[0].Message.ToolCalls {
+			blocks = append(blocks, ContentBlock{
+				Type:  BlockTypeToolUse,
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: []byte(tc.Function.Arguments),
+			})
+		}
+		return blocks
+	}
+
+	// Anthropic 格式：从 content 数组读取
 	for _, c := range resp.Content {
 		block := ContentBlock{
 			Type: ContentBlockType(c.Type),

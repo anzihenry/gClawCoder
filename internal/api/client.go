@@ -45,11 +45,24 @@ type Usage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
-// ToolDefinition 工具定义
+// ToolDefinition 工具定义 (Anthropic 格式)
 type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// OpenAIToolDefinition OpenAI 兼容的工具定义
+type OpenAIToolDefinition struct {
+	Type     string          `json:"type"`
+	Function *FunctionSchema `json:"function,omitempty"`
+}
+
+// FunctionSchema 函数 schema
+type FunctionSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // APIRequest API 请求
@@ -63,7 +76,7 @@ type APIRequest struct {
 	System     string           `json:"system,omitempty"`
 }
 
-// APIResponse API 响应
+// APIResponse API 响应 (Anthropic 格式)
 type APIResponse struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
@@ -79,6 +92,25 @@ type APIResponse struct {
 	} `json:"content"`
 	Model string `json:"model"`
 	Usage Usage  `json:"usage"`
+
+	// OpenAI 兼容字段
+	Choices []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
+			ToolCalls        []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls,omitempty"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices,omitempty"`
 }
 
 // StreamEvent 流事件
@@ -100,6 +132,7 @@ type Client struct {
 	AuthHeader string // 认证头名称
 	Version    string // API 版本
 	Endpoint   string // API endpoint 路径
+	Provider   string // "anthropic", "openai", "alibaba"
 }
 
 // NewClient 创建新客户端
@@ -147,12 +180,17 @@ func NewClientWithFullConfig(apiKey, model, baseURL, authType, authHeader, versi
 		authHeader = "x-api-key"
 	}
 
-	// 根据 BaseURL 设置 endpoint
+	// 根据 BaseURL 设置 endpoint 和 provider
 	endpoint := "/v1/messages"
+	provider := "anthropic"
 	if baseURL != "" {
 		if strings.Contains(baseURL, "dashscope") {
 			// Alibaba uses /chat/completions
 			endpoint = "/chat/completions"
+			provider = "alibaba"
+		} else if strings.Contains(baseURL, "openai") {
+			endpoint = "/chat/completions"
+			provider = "openai"
 		}
 	}
 
@@ -166,6 +204,7 @@ func NewClientWithFullConfig(apiKey, model, baseURL, authType, authHeader, versi
 		AuthHeader: authHeader,
 		Version:    version,
 		Endpoint:   endpoint,
+		Provider:   provider,
 	}
 }
 
@@ -183,6 +222,29 @@ func (c *Client) SendMessage(messages []Message, tools []ToolDefinition) (*APIRe
 	return c.sendRequest(reqBody)
 }
 
+// convertToolsForProvider 转换 tools 格式以适配不同 Provider
+func (c *Client) convertToolsForProvider(tools []ToolDefinition) interface{} {
+	if c.Provider == "anthropic" {
+		// Anthropic 格式：直接使用
+		return tools
+	}
+
+	// OpenAI/Alibaba 格式
+	openaiTools := make([]OpenAIToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		// Anthropic 的 input_schema 就是 OpenAI 的 parameters
+		openaiTools = append(openaiTools, OpenAIToolDefinition{
+			Type: "function",
+			Function: &FunctionSchema{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.InputSchema,
+			},
+		})
+	}
+	return openaiTools
+}
+
 // SendMessageStream 发送流式消息
 func (c *Client) SendMessageStream(messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	reqBody := APIRequest{
@@ -198,11 +260,51 @@ func (c *Client) SendMessageStream(messages []Message, tools []ToolDefinition) (
 }
 
 func (c *Client) sendRequest(reqBody APIRequest) (*APIResponse, error) {
+	// 转换 tools 格式以适配不同 Provider
+	if reqBody.Tools != nil && c.Provider != "anthropic" {
+		// 创建一个临时结构体用于 JSON 序列化
+		type OpenAIRequest struct {
+			Model      string      `json:"model"`
+			MaxTokens  int         `json:"max_tokens,omitempty"`
+			Messages   []Message   `json:"messages"`
+			Tools      interface{} `json:"tools,omitempty"`
+			ToolChoice interface{} `json:"tool_choice,omitempty"`
+			Stream     bool        `json:"stream"`
+			System     string      `json:"system,omitempty"`
+		}
+
+		convertedTools := c.convertToolsForProvider(reqBody.Tools)
+
+		// OpenAI 格式的 tool_choice
+		var toolChoice interface{} = "auto"
+
+		openaiReq := OpenAIRequest{
+			Model:      reqBody.Model,
+			MaxTokens:  reqBody.MaxTokens,
+			Messages:   reqBody.Messages,
+			Tools:      convertedTools,
+			ToolChoice: toolChoice,
+			Stream:     reqBody.Stream,
+			System:     reqBody.System,
+		}
+
+		jsonData, err := json.Marshal(openaiReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		return c.sendHTTPRequest(jsonData)
+	}
+
+	// Anthropic 格式
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	return c.sendHTTPRequest(jsonData)
+}
 
+// sendHTTPRequest 发送 HTTP 请求
+func (c *Client) sendHTTPRequest(jsonData []byte) (*APIResponse, error) {
 	endpoint := c.Endpoint
 	if endpoint == "" {
 		endpoint = "/v1/messages"
@@ -249,11 +351,48 @@ func (c *Client) sendRequest(reqBody APIRequest) (*APIResponse, error) {
 }
 
 func (c *Client) sendStreamRequest(reqBody APIRequest) (<-chan StreamEvent, error) {
+	// 转换 tools 格式以适配不同 Provider
+	if reqBody.Tools != nil && c.Provider != "anthropic" {
+		type OpenAIRequest struct {
+			Model      string      `json:"model"`
+			MaxTokens  int         `json:"max_tokens,omitempty"`
+			Messages   []Message   `json:"messages"`
+			Tools      interface{} `json:"tools,omitempty"`
+			ToolChoice interface{} `json:"tool_choice,omitempty"`
+			Stream     bool        `json:"stream"`
+			System     string      `json:"system,omitempty"`
+		}
+
+		convertedTools := c.convertToolsForProvider(reqBody.Tools)
+		var toolChoice interface{} = "auto"
+
+		openaiReq := OpenAIRequest{
+			Model:      reqBody.Model,
+			MaxTokens:  reqBody.MaxTokens,
+			Messages:   reqBody.Messages,
+			Tools:      convertedTools,
+			ToolChoice: toolChoice,
+			Stream:     reqBody.Stream,
+			System:     reqBody.System,
+		}
+
+		jsonData, err := json.Marshal(openaiReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		return c.sendStreamHTTPRequest(jsonData)
+	}
+
+	// Anthropic 格式
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	return c.sendStreamHTTPRequest(jsonData)
+}
 
+// sendStreamHTTPRequest 发送流式 HTTP 请求
+func (c *Client) sendStreamHTTPRequest(jsonData []byte) (<-chan StreamEvent, error) {
 	endpoint := c.Endpoint
 	if endpoint == "" {
 		endpoint = "/v1/messages"
