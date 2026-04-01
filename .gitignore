@@ -1,5 +1,5 @@
 # Binaries
-gclaw
+/gclaw
 *.exe
 *.exe~
 *.dll
