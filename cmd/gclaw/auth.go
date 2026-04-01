@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gclawcoder/gclaw/internal/api"
-	"github.com/gclawcoder/gclaw/internal/tui"
 )
 
 func cmdLogin() {
@@ -445,26 +444,6 @@ func cmdWhoami() {
 		if desc := info["description"]; desc != nil && desc.(string) != "" {
 			fmt.Printf("  Description: %v\n", desc)
 		}
-	}
-}
-
-func cmdTUI() {
-	app, err := tui.NewApp()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ TUI Error: %v\n", err)
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "💡 Solution:")
-		fmt.Fprintln(os.Stderr, "   1. Run directly in terminal: ./gclaw tui")
-		fmt.Fprintln(os.Stderr, "   2. Don't use pipes or redirections")
-		fmt.Fprintln(os.Stderr, "   3. If using SSH, add -t flag: ssh -t user@host ./gclaw tui")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Alternative: Use REPL mode instead: ./gclaw repl")
-		os.Exit(1)
-	}
-
-	if err := app.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		os.Exit(1)
 	}
 }
 

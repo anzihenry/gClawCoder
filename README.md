@@ -18,9 +18,6 @@ go build -o gclaw ./cmd/gclaw
 ### 运行
 
 ```bash
-# TUI 界面（推荐）
-./gclaw tui
-
 # REPL 模式
 ./gclaw repl
 
