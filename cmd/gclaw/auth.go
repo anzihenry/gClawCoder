@@ -449,7 +449,7 @@ func cmdWhoami() {
 }
 
 func cmdTUI() {
-	app, err := tui.NewApplication()
+	app, err := tui.NewApp()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ TUI Error: %v\n", err)
 		fmt.Fprintln(os.Stderr, "")

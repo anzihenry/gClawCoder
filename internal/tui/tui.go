@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/gclawcoder/gclaw/internal/api"
 	"github.com/gclawcoder/gclaw/internal/config"
@@ -14,14 +13,14 @@ import (
 	"github.com/rivo/tview"
 )
 
-// Application TUI 应用
-type Application struct {
+// App TUI 应用
+type App struct {
 	app          *tview.Application
 	grid         *tview.Grid
 	header       *tview.TextView
 	messages     *tview.TextView
 	input        *tview.TextArea
-	footer       *tview.TextView
+	status       *tview.TextView
 	session      *conversation.Session
 	runtime      *conversation.ConversationRuntime
 	apiKeyClient *api.APIKeyClient
@@ -29,13 +28,10 @@ type Application struct {
 	busy         bool
 	history      []string
 	historyIdx   int
-	width        int
-	height       int
 }
 
-// NewApplication 创建应用
-func NewApplication() (*Application, error) {
-	// 检查 tty
+// NewApp 创建应用
+func NewApp() (*App, error) {
 	if _, err := os.Stat("/dev/tty"); err != nil {
 		return nil, fmt.Errorf("TUI requires a real terminal")
 	}
@@ -73,7 +69,7 @@ func NewApplication() (*Application, error) {
 	session := conversation.NewSession()
 	runtime := conversation.NewConversationRuntime(session, client, registry, nil, "")
 
-	a := &Application{
+	a := &App{
 		app:          tview.NewApplication(),
 		apiKeyClient: apiKeyClient,
 		cfg:          cfg,
@@ -111,52 +107,64 @@ func createClient(cfg *config.RuntimeConfig) *api.Client {
 	return api.NewClientWithFullConfig(cfg.APIKey, cfg.Model, cfg.BaseURL, authType, authHeader, cfg.Version)
 }
 
-func (a *Application) createUI() {
-	// Header
+func (a *App) createUI() {
+	// 使用更现代的颜色方案
+	bgColor := tcell.ColorDefault
+	borderColor := tcell.ColorDarkGray
+	textColor := tcell.ColorWhite
+	accentColor := tcell.ColorLightBlue
+
+	// Header - 简洁的标题栏
 	a.header = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(fmt.Sprintf(" [yellow]gClawCoder[] [white]| Model: [cyan]%s[] [white]| [gray]Ctrl+G: Send, Ctrl+Q: Quit, Ctrl+H: Help[]", a.cfg.Model))
+		SetText(fmt.Sprintf(" [bold][white]gClawCoder[reset] [gray]·[reset] [cyan]%s[reset] [gray]·[reset] [darkgray]Ctrl+G: Send  Ctrl+Q: Quit[reset]", a.cfg.Model))
 	a.header.SetBackgroundColor(tcell.ColorDarkBlue)
+	a.header.SetTextColor(textColor)
 
-	// Messages
+	// Messages - 对话区域
 	a.messages = tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
 		SetScrollable(true)
-	a.messages.SetBorder(true).
-		SetBorderColor(tcell.ColorGray).
-		SetTitle(" Chat ")
+	a.messages.SetBorder(true)
+	a.messages.SetBorderColor(borderColor)
+	a.messages.SetBackgroundColor(bgColor)
+	a.messages.SetTitle(" [bold]Messages[reset] ")
+	a.messages.SetTitleColor(accentColor)
 
-	// Input
+	// Input - 输入区域
 	a.input = tview.NewTextArea().
 		SetWrap(true).
-		SetPlaceholder("Type your message here...")
-	a.input.SetBorder(true).
-		SetBorderColor(tcell.ColorGray).
-		SetTitle(" Input ")
+		SetPlaceholder(" [darkgray]Type your message...[reset]")
+	a.input.SetBorder(true)
+	a.input.SetBorderColor(accentColor)
+	a.input.SetBackgroundColor(bgColor)
+	a.input.SetTitle(" [bold]Input[reset] ")
+	a.input.SetTitleColor(accentColor)
 
-	// Footer
-	a.footer = tview.NewTextView().
+	// Status - 状态栏
+	a.status = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [green]● Ready[]")
-	a.footer.SetBackgroundColor(tcell.ColorDarkGray)
+		SetText(" [green]●[reset] [gray]Ready[reset]")
+	a.status.SetBackgroundColor(tcell.ColorDarkGray)
+	a.status.SetTextColor(textColor)
 
-	// Grid layout
+	// Grid 布局
 	a.grid = tview.NewGrid().
 		SetColumns(0).
-		SetRows(1, 0, 3, 1).
-		SetBorders(false).
-		AddItem(a.header, 0, 0, 1, 1, 0, 0, false).
-		AddItem(a.messages, 1, 0, 1, 1, 0, 0, false).
-		AddItem(a.input, 2, 0, 1, 1, 0, 0, true).
-		AddItem(a.footer, 3, 0, 1, 1, 0, 0, false)
+		SetRows(1, 0, 4, 1).
+		SetBorders(false)
+
+	a.grid.AddItem(a.header, 0, 0, 1, 1, 0, 0, false)
+	a.grid.AddItem(a.messages, 1, 0, 1, 1, 0, 0, false)
+	a.grid.AddItem(a.input, 2, 0, 1, 1, 0, 0, true)
+	a.grid.AddItem(a.status, 3, 0, 1, 1, 0, 0, false)
 
 	a.app.SetRoot(a.grid, true).SetFocus(a.input)
 }
 
-func (a *Application) setupHandlers() {
+func (a *App) setupHandlers() {
 	a.input.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		// Ctrl+G: Send
 		if ev.Key() == tcell.KeyEnter && ev.Modifiers()&tcell.ModCtrl != 0 {
 			text := a.input.GetText()
 			if text != "" && !a.busy {
@@ -164,17 +172,10 @@ func (a *Application) setupHandlers() {
 			}
 			return nil
 		}
-		// Ctrl+Q: Quit
 		if ev.Key() == tcell.KeyRune && ev.Rune() == 'q' && ev.Modifiers()&tcell.ModCtrl != 0 {
 			a.app.Stop()
 			return nil
 		}
-		// Ctrl+H: Help
-		if ev.Key() == tcell.KeyRune && ev.Rune() == 'h' && ev.Modifiers()&tcell.ModCtrl != 0 {
-			a.showHelp()
-			return nil
-		}
-		// Up: History previous
 		if ev.Key() == tcell.KeyUp {
 			if a.historyIdx < len(a.history)-1 {
 				a.historyIdx++
@@ -182,7 +183,6 @@ func (a *Application) setupHandlers() {
 			}
 			return nil
 		}
-		// Down: History next
 		if ev.Key() == tcell.KeyDown {
 			if a.historyIdx > 0 {
 				a.historyIdx--
@@ -197,31 +197,33 @@ func (a *Application) setupHandlers() {
 	})
 }
 
-func (a *Application) send(text string) {
+func (a *App) send(text string) {
 	a.busy = true
 	a.input.SetText("", true)
 	a.history = append(a.history, text)
 	a.historyIdx = -1
 
-	// Add user message
-	a.messages.SetText(fmt.Sprintf("%s[bold][green]▌ You:[reset] %s\n\n", a.messages.GetText(true), text))
-	a.footer.SetText(" [yellow]● Thinking...[]")
+	// 使用更美观的消息格式
+	a.messages.SetText(fmt.Sprintf("%s\n[bold][green]➤ You:[reset] %s", a.messages.GetText(true), text))
+	a.status.SetText(" [yellow]●[reset] [yellow]Thinking...[reset]")
 
 	go func() {
 		result, err := a.runtime.RunTurn(text)
 		a.app.QueueUpdateDraw(func() {
 			if err != nil {
-				a.messages.SetText(fmt.Sprintf("%s[bold][red]▌ Error:[reset] %v\n\n", a.messages.GetText(true), err))
-				a.footer.SetText(" [red]● Error[]")
+				a.messages.SetText(fmt.Sprintf("%s\n[bold][red]✗ Error:[reset] %v", a.messages.GetText(true), err))
+				a.status.SetText(" [red]●[reset] [red]Error[reset]")
 			} else {
 				for _, msg := range result.AssistantMessages {
 					for _, block := range msg.Content {
 						if block.Type == conversation.BlockTypeText {
-							a.messages.SetText(fmt.Sprintf("%s[bold][cyan]▌ Assistant:[reset] %s\n\n", a.messages.GetText(true), block.Text))
+							// 格式化 AI 回复，支持简单的 markdown
+							formatted := a.formatMarkdown(block.Text)
+							a.messages.SetText(fmt.Sprintf("%s\n[bold][cyan]➤ Assistant:[reset] %s", a.messages.GetText(true), formatted))
 						}
 					}
 				}
-				a.footer.SetText(" [green]● Ready[]")
+				a.status.SetText(" [green]●[reset] [green]Ready[reset]")
 			}
 			a.busy = false
 			a.app.SetFocus(a.input)
@@ -229,86 +231,19 @@ func (a *Application) send(text string) {
 	}()
 }
 
-func (a *Application) showHelp() {
-	help := tview.NewTextView().
-		SetDynamicColors(true).
-		SetText(`
-[bold]Keyboard Shortcuts:[reset]
-
-  [yellow]Ctrl+G[reset]  Send message
-  [yellow]Ctrl+Q[reset]  Quit application
-  [yellow]Ctrl+H[reset]  Show this help
-  [yellow]↑/↓[reset]     Navigate history
-  [yellow]Ctrl+C[reset]  Copy last response
-
-[bold]Tips:[reset]
-
-  - Use markdown for code blocks
-  - Ask follow-up questions
-  - Use /clear to reset conversation
-`)
-	help.SetBorder(true).
-		SetTitle(" Help ").
-		SetBackgroundColor(tcell.ColorDarkBlue)
-
-	help.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyEnter {
-			a.grid.RemoveItem(help)
-			a.app.SetFocus(a.input)
-			return nil
-		}
-		return ev
-	})
-
-	a.grid.AddItem(help, 1, 0, 1, 1, 0, 0, true)
-	a.app.SetFocus(help)
+// formatMarkdown 简单的 markdown 格式化
+func (a *App) formatMarkdown(text string) string {
+	// 代码块
+	text = strings.ReplaceAll(text, "```", "[yellow]```[reset]")
+	// 行内代码
+	text = strings.ReplaceAll(text, "`", "[yellow]`[reset]")
+	// 粗体
+	text = strings.ReplaceAll(text, "**", "[bold]")
+	text = strings.ReplaceAll(text, "__", "[bold]")
+	return text
 }
 
 // Run 运行应用
-func (a *Application) Run() error {
+func (a *App) Run() error {
 	return a.app.Run()
-}
-
-// Helper functions
-func getUserHome() string {
-	home, _ := os.UserHomeDir()
-	return home
-}
-
-func formatTime(t time.Time) string {
-	return t.Format("15:04")
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
-func containsString(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func joinStrings(separator string, parts ...string) string {
-	return strings.Join(parts, separator)
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
